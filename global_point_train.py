@@ -238,6 +238,7 @@ def main_ddp():
     fgm = FGM(model, epsilon=1) if configs.use_attack else None
     scaler = GradScaler() if configs.use_amp else None
     optimizer = torch.optim.Adam(model.parameters(), lr=configs.learning_rate)
+
     if configs.scheduler == "CAWR":
         T_mult = configs.cawr_scheduler["T_mult"]
         rewarm_epoch_num = configs.cawr_scheduler["rewarm_epoch_num"]
@@ -253,7 +254,7 @@ def main_ddp():
     max_f1 = 0.
     for epoch in range(configs.num_train_epoch):
         train_sampler.set_epoch(epoch)
-        print("Rank:{} - Epoch {}/{}".format(local_rank, epoch, configs.num_train_epoch - 1))
+        print("Rank:{} - Epoch {}/{}\n".format(local_rank, epoch, configs.num_train_epoch - 1))
 
         avg_loss = train_ddp(model, train_dataloader, optimizer, scheduler, device, fgm, scaler)
         if local_rank == 0:

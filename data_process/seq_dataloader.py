@@ -125,10 +125,15 @@ def data_generator_ddp(tokenizer):
 
 if __name__ == "__main__":
     from transformers import BertTokenizerFast
+    train_data_path = os.path.join("../", configs.train_data_path, "example.train")
+    train_data = load_data(train_data_path)
 
     tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/", add_special_tokens=True,
                                                   do_lower_case=False)
+    data_collate = DataCollate(tokenizer)
+    train_dataloader = DataLoader(SeqDataset(train_data), batch_size=2, shuffle=True,
+                                  num_workers=configs.num_work_load, drop_last=False,
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
 
-    t_data, v_data = data_generator(tokenizer)
-    batch_X = next(iter(t_data))
+    batch_X = next(iter(train_dataloader))
     print(batch_X)

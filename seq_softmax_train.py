@@ -9,6 +9,7 @@ from torch.cuda.amp import GradScaler
 from transformers import BertTokenizerFast
 import os
 from tqdm import tqdm
+from sklearn.metrics import classification_report
 
 from models.softmax_ner import BertSoftmax
 from utils.all_loss import FocalLoss, LabelSmoothingCrossEntropy
@@ -17,7 +18,6 @@ from train_config import seq_config as configs
 from utils.utils import set_random_seed
 from data_process.seq_dataloader import data_generator, data_generator_ddp
 from callback.adversarial import FGM
-
 
 LOSS_FUNC_LIST = {"cross_entropy": CrossEntropyLoss(),
                   "label_smooth": LabelSmoothingCrossEntropy(),
@@ -45,10 +45,7 @@ def train(model, dataloader, epoch, optimizer, scheduler, device):
                                                                                      batch_labels.to(device))
 
         output = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
-        # active_loss = batch_attention_mask.view(-1) == 1
-        active_logits = output.view(-1, len(configs.ent2id))
-        active_labels = batch_labels.view(-1)
-        loss = LOSS_FUNC_LIST[configs.loss_type](active_logits, active_labels)
+        loss = LOSS_FUNC_LIST[configs.loss_type](output.view(-1, len(configs.ent2id)), batch_labels.view(-1))
         # loss = LOSS_FUNC_LIST[configs.loss_type](logits.view(-1, self.num_labels), labels.view(-1))
 
         optimizer.zero_grad()
@@ -111,6 +108,7 @@ def main():
     model = BertSoftmax(ent_type_size, configs.dropout_rate)
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=configs.learning_rate)
+
     if configs.scheduler == "CAWR":
         T_mult = configs.cawr_scheduler["T_mult"]
         rewarm_epoch_num = configs.cawr_scheduler["rewarm_epoch_num"]
@@ -138,5 +136,163 @@ def main():
         print(f"Best F1: {max_f1}")
 
 
+def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_scaler):
+    model.train()
+
+    total_loss = 0.0
+    avg_loss = 0.0
+    for batch_id, batch_data in enumerate(dataloader):
+        optimizer.zero_grad()
+
+        batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels = batch_data
+        batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels = (batch_input_ids.to(device),
+                                                                                     batch_attention_mask.to(device),
+                                                                                     batch_token_type_ids.to(device),
+                                                                                     batch_labels.to(device))
+
+        if configs.use_amp:
+            with autocast():
+                logits = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+                loss = LOSS_FUNC_LIST[configs.loss_type](logits.view(-1, len(configs.ent2id)), batch_labels.view(-1))
+            dist.barrier()
+            amp_scaler.scale(loss).backward()
+
+            if configs.use_attack:
+                adversarial.attack()
+                with autocast():
+                    logits_adv = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+                    loss_dev = LOSS_FUNC_LIST[configs.loss_type](logits_adv.view(-1, len(configs.ent2id)),
+                                                                 batch_labels.view(-1))
+                dist.barrier()
+                amp_scaler.scale(loss_dev).backward()
+                adversarial.restore()
+
+            amp_scaler.step(optimizer)
+            amp_scaler.update()
+        else:
+            logits = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+            loss = LOSS_FUNC_LIST[configs.loss_type](logits.view(-1, len(configs.ent2id)), batch_labels.view(-1))
+            dist.barrier()
+            loss.backward()
+
+            if configs.use_attack:
+                adversarial.attack()  # 在embedding上添加对抗扰动
+                logits_adv = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+                loss_dev = LOSS_FUNC_LIST[configs.loss_type](logits_adv.view(-1, len(configs.ent2id)),
+                                                             batch_labels.view(-1))
+                dist.barrier()
+
+                loss_dev.backward()  # 反向传播，并在正常的grad基础上，累加对抗训练的梯度
+                adversarial.restore()  # 恢复embedding参数
+
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+
+        all_reduce_loss = ddp_reduce_mean(loss, configs.nprocs_per_node)
+        total_loss += all_reduce_loss.item()
+        avg_loss = total_loss / (batch_id + 1)
+
+    return avg_loss
+
+
+def valid_ddp(model, dataloader, metrics, device):
+    model.eval()
+    metrics.reset()
+
+    label_symbol, prediction_symbol = [], []
+    for batch_data in tqdm(dataloader):
+        batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels = batch_data
+        batch_input_ids, batch_attention_mask, batch_token_type_ids = (batch_input_ids.to(device),
+                                                                       batch_attention_mask.to(device),
+                                                                       batch_token_type_ids.to(device))
+        with torch.no_grad():
+            logits = model.module(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+
+        predictions = logits.argmax(dim=-1).cpu().numpy().tolist()
+        labels = batch_labels.numpy().tolist()
+        prediction_symbol += [[configs.id2ent[int(p)] for (p, l) in zip(prediction, label) if l != -100]
+                              for prediction, label in zip(predictions, labels)]
+        label_symbol += [[configs.id2ent[int(l)] for l in label if l != -100] for label in labels]
+    c_label = sum(label_symbol, [])
+    c_prediction = sum(prediction_symbol, [])
+    c_m = classification_report(c_label, c_prediction)
+    print(c_m)
+    metrics.update(label_symbol, prediction_symbol)
+    eval_info, entity_info = metrics.result()
+
+    print("******************************************\n")
+    print(eval_info, "\n")
+    print("******************************************\n")
+    print(entity_info)
+    return eval_info["f1"]
+
+
+def main_ddp():
+    # args = get_parse_args()
+    set_random_seed(configs.seed)
+    ent_type_size = len(configs.ent2id)
+
+    os.environ["TOKENIZERS_PARALLELISM"] = 'true'
+
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+
+    if local_rank == 0:
+        output_writer = SummaryWriter("train_logs/softmax")
+
+    tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
+                                                  do_lower_case=False)
+    train_dataloader, valid_dataloader, train_sampler = data_generator_ddp(tokenizer)
+
+    model = BertSoftmax(ent_type_size, configs.dropout_rate)
+    model = model.to(device)
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+    fgm = FGM(model, epsilon=1) if configs.use_attack else None
+    scaler = GradScaler() if configs.use_amp else None
+    optimizer = torch.optim.AdamW(model.parameters(), lr=configs.learning_rate)
+
+    if configs.scheduler == "CAWR":
+        T_mult = configs.cawr_scheduler["T_mult"]
+        rewarm_epoch_num = configs.cawr_scheduler["rewarm_epoch_num"]
+        scheduler = CosineAnnealingWarmRestarts(optimizer, len(train_dataloader) * rewarm_epoch_num, T_mult)
+    elif configs.scheduler == "Step":
+        decay_rate = configs.step_scheduler["decay_rate"]
+        decay_steps = configs.step_scheduler["decay_steps"]
+        scheduler = StepLR(optimizer, step_size=decay_steps, gamma=decay_rate)
+    else:
+        scheduler = None
+    metrics = SeqEntityScore()
+
+    max_f1 = 0.
+    for epoch in range(configs.num_train_epoch):
+        train_sampler.set_epoch(epoch)
+        print("Rank:{} - Epoch {}/{}\n".format(local_rank, epoch, configs.num_train_epoch - 1))
+
+        avg_loss = train_ddp(model, train_dataloader, optimizer, scheduler, device, fgm, scaler)
+        if local_rank == 0:
+            valid_f1 = valid_ddp(model, valid_dataloader, metrics, device)
+            output_writer.add_scalar("loss", avg_loss, epoch)
+            output_writer.add_scalar("f1", valid_f1, epoch)
+
+            if valid_f1 > max_f1:
+                max_f1 = valid_f1
+                if max_f1 > configs.f1_save_threshold:
+                    model_f1_val = int(round(max_f1, 3) * 1000)
+                    torch.save(model.module.state_dict(),
+                               os.path.join(configs.model_save_path, "gp_{}.pt".format(model_f1_val)))
+
+            print(f"Best F1: {max_f1}")
+
+        print(f"Rank:{local_rank} waiting before the barrier\n")
+        dist.barrier()
+        print(f"Rank:{local_rank} left the barrier\n")
+
+
 if __name__ == "__main__":
-    main()
+    if configs.is_ddp:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        main_ddp()
+    else:
+        main()
