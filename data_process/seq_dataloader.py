@@ -33,7 +33,7 @@ class DataCollate:
             ent2id (dict): ent到id的映射
 
         Returns:
-            list: [(sample, input_ids, attention_mask, token_type_ids, labels),(),()...]
+            list: [(input_ids, attention_mask, token_type_ids, labels),(),()...]
         """
         batch_sentence = []
         for sample in datas:
@@ -57,6 +57,7 @@ class DataCollate:
 
                 batch_label[batch_idx][token_start] = ent2id[tag]
                 batch_label[batch_idx][token_start + 1: token_end + 1] = ent2id[tag] + 1
+            # print(batch_label)
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
                torch.tensor(batch_label)
@@ -83,8 +84,8 @@ class DataCollate:
 
 
 def data_generator(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "example.train")
-    dev_data_path = os.path.join(configs.train_data_path, "example.dev")
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
     dev_data = load_data(dev_data_path)
@@ -101,8 +102,8 @@ def data_generator(tokenizer):
 
 
 def data_generator_ddp(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "example.train")
-    dev_data_path = os.path.join(configs.train_data_path, "example.dev")
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
     dev_data = load_data(dev_data_path)
@@ -125,15 +126,24 @@ def data_generator_ddp(tokenizer):
 
 if __name__ == "__main__":
     from transformers import BertTokenizerFast
-    train_data_path = os.path.join("../", configs.train_data_path, "example.train")
-    train_data = load_data(train_data_path)
 
-    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/", add_special_tokens=True,
-                                                  do_lower_case=False)
-    data_collate = DataCollate(tokenizer)
-    train_dataloader = DataLoader(SeqDataset(train_data), batch_size=2, shuffle=True,
-                                  num_workers=configs.num_work_load, drop_last=False,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
+    train_path = os.path.join("../", configs.train_data_path, "train.txt")
+    train_datas = load_data(train_path)
 
-    batch_X = next(iter(train_dataloader))
-    print(batch_X)
+    test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
+                                                       add_special_tokens=True,
+                                                       do_lower_case=False)
+    data_coll = DataCollate(test_tokenizer)
+    train_loader = DataLoader(SeqDataset(train_datas), batch_size=5, shuffle=True,
+                              num_workers=1, drop_last=False,
+                              collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
+
+    batch_X = next(iter(train_loader))
+    # print(batch_X)
+    for k in range(5):
+        encoded_sequence = batch_X[0][k]
+        print(test_tokenizer.decode(encoded_sequence))
+
+        encoded_label = batch_X[3][k].numpy().tolist()
+        print(encoded_label)
+        print([configs.id2ent[i] for i in encoded_label if i != -100])

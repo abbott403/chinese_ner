@@ -1,0 +1,10 @@
+{
+    "default": {
+        "train": {
+            "meta": "train.txt"
+        },
+        "test": {
+            "meta": "test.txt"
+        }
+    }
+}

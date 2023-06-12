@@ -4,7 +4,7 @@ import torch
 import json
 from transformers import BertTokenizerFast
 from models.global_point import GlobalPoint
-from data_process.global_point_dataloader import DataCollate, GlobalPointDataset
+from data_process.global_point_dataloader import GlobalPointDataset
 from torch.utils.data import DataLoader
 from utils.utils import decode_ent
 
@@ -14,8 +14,34 @@ def load_data(data_path):
     with open(data_path, encoding="utf-8") as f:
         for line in f:
             line = json.loads(line)
-            datas.append(line)
+            datas.append(line["text"])
     return datas
+
+
+class DataCollate:
+    def __init__(self, tokenizer, add_special_tokens=True):
+        super(DataCollate, self).__init__()
+        self.tokenizer = tokenizer
+        self.add_special_tokens = add_special_tokens
+
+    def generate_batch(self, batch_data):
+        batch_inputs = self.tokenizer(batch_data, padding=True, return_tensors="pt")
+        input_ids, token_type_ids, attention_mask = batch_inputs["input_ids"], batch_inputs["token_type_ids"], \
+                                                    batch_inputs["attention_mask"]
+        input_ids_list = []
+        attention_mask_list = []
+        token_type_ids_list = []
+
+        for sample in zip(input_ids, token_type_ids, attention_mask):
+            input_ids_list.append(sample[0])
+            attention_mask_list.append(sample[1])
+            token_type_ids_list.append(sample[2])
+
+        batch_input_ids = torch.stack(input_ids_list, dim=0)
+        batch_attention_mask = torch.stack(attention_mask_list, dim=0)
+        batch_token_type_ids = torch.stack(token_type_ids_list, dim=0)
+
+        return batch_data, batch_input_ids, batch_attention_mask, batch_token_type_ids
 
 
 def data_generator(tokenizer):
@@ -25,21 +51,10 @@ def data_generator(tokenizer):
     predict_data_path = os.path.join("data/", "test.json")
     predict_data = load_data(predict_data_path)
 
-    all_data = predict_data
-
-    # TODO:句子截取
-    max_tok_num = 0
-    for sample in all_data:
-        tokens = tokenizer.tokenize(sample["text"])
-        max_tok_num = max(max_tok_num, len(tokens))
-    assert max_tok_num <= 128, f'数据文本最大token数量{max_tok_num}超过预设128'
-    max_seq_len = min(max_tok_num, 128)
-
     data_collate = DataCollate(tokenizer)
 
     predict_dataloader = DataLoader(GlobalPointDataset(predict_data), batch_size=32, shuffle=False, drop_last=False,
-                                    collate_fn=lambda x: data_collate.generate_batch(x, max_seq_len, configs.ent2id,
-                                                                                     data_type="predict"))
+                                    collate_fn=lambda x: data_collate.generate_batch(x))
     return predict_dataloader
 
 
@@ -48,20 +63,19 @@ def predict(dataloader, model, device, tokenizer):
 
     model.eval()
     for batch_data in dataloader:
-        batch_samples, batch_input_ids, batch_attention_mask, batch_token_type_ids, _ = batch_data
+        batch_sample, batch_input_ids, batch_attention_mask, batch_token_type_ids = batch_data
         batch_input_ids, batch_attention_mask, batch_token_type_ids = (batch_input_ids.to(device),
                                                                        batch_attention_mask.to(device),
                                                                        batch_token_type_ids.to(device))
         with torch.no_grad():
             batch_logits = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
 
-        for ind in range(len(batch_samples)):
-            gold_sample = batch_samples[ind]
+        for ind in range(len(batch_sample)):
+            gold_sample = batch_sample[ind]
             text = gold_sample["text"]
-            text_id = gold_sample["id"]
             pred_matrix = batch_logits[ind]
             labels = decode_ent(text, pred_matrix, tokenizer)
-            predict_res.append({"id": text_id, "text": text, "label": labels})
+            predict_res.append({"text": text, "label": labels})
     return predict_res
 
 

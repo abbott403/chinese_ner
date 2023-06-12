@@ -6,10 +6,9 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR
 from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler
-from transformers import BertTokenizerFast
+from transformers import BertTokenizerFast, get_scheduler, BertConfig
 import os
 from tqdm import tqdm
-from sklearn.metrics import classification_report
 
 from models.softmax_ner import BertSoftmax
 from utils.all_loss import FocalLoss, LabelSmoothingCrossEntropy
@@ -105,7 +104,8 @@ def main():
                                                   do_lower_case=False)
     train_dataloader, valid_dataloader = data_generator(tokenizer)
 
-    model = BertSoftmax(ent_type_size, configs.dropout_rate)
+    bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
+    model = BertSoftmax(bert_config, ent_type_size, configs.dropout_rate)
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=configs.learning_rate)
 
@@ -117,6 +117,8 @@ def main():
         decay_rate = configs.step_scheduler["decay_rate"]
         decay_steps = configs.step_scheduler["decay_steps"]
         scheduler = StepLR(optimizer, step_size=decay_steps, gamma=decay_rate)
+    elif configs.scheduler == "Linear":
+        scheduler = get_scheduler("linear", optimizer, 0, configs.num_train_epoch * len(train_dataloader))
     else:
         scheduler = None
     metrics = SeqEntityScore()
@@ -214,10 +216,7 @@ def valid_ddp(model, dataloader, metrics, device):
         prediction_symbol += [[configs.id2ent[int(p)] for (p, l) in zip(prediction, label) if l != -100]
                               for prediction, label in zip(predictions, labels)]
         label_symbol += [[configs.id2ent[int(l)] for l in label if l != -100] for label in labels]
-    c_label = sum(label_symbol, [])
-    c_prediction = sum(prediction_symbol, [])
-    c_m = classification_report(c_label, c_prediction)
-    print(c_m)
+
     metrics.update(label_symbol, prediction_symbol)
     eval_info, entity_info = metrics.result()
 
@@ -246,7 +245,8 @@ def main_ddp():
                                                   do_lower_case=False)
     train_dataloader, valid_dataloader, train_sampler = data_generator_ddp(tokenizer)
 
-    model = BertSoftmax(ent_type_size, configs.dropout_rate)
+    bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
+    model = BertSoftmax(bert_config, ent_type_size, configs.dropout_rate)
     model = model.to(device)
     model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
     fgm = FGM(model, epsilon=1) if configs.use_attack else None
@@ -261,6 +261,8 @@ def main_ddp():
         decay_rate = configs.step_scheduler["decay_rate"]
         decay_steps = configs.step_scheduler["decay_steps"]
         scheduler = StepLR(optimizer, step_size=decay_steps, gamma=decay_rate)
+    elif configs.scheduler == "Linear":
+        scheduler = get_scheduler("linear", optimizer, 0, configs.num_train_epoch * len(train_dataloader))
     else:
         scheduler = None
     metrics = SeqEntityScore()

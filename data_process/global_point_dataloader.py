@@ -33,7 +33,7 @@ class DataCollate:
             ent2id (dict): ent到id的映射
 
         Returns:
-            list: [(sample, input_ids, attention_mask, token_type_ids, labels),(),()...]
+            list: [(input_ids, attention_mask, token_type_ids, labels),(),()...]
         """
         ent_type_size = len(ent2id)
         batch_size = len(datas)
