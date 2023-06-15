@@ -3,10 +3,10 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch import distributed as dist
 from torch.utils.tensorboard import SummaryWriter
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR, LinearLR
 from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler
-from transformers import BertTokenizerFast, get_scheduler, BertConfig
+from transformers import BertTokenizerFast, BertConfig
 import os
 from tqdm import tqdm
 
@@ -14,20 +14,14 @@ from models.softmax_ner import BertSoftmax
 from utils.all_loss import FocalLoss, LabelSmoothingCrossEntropy
 from utils.all_metrics import SeqEntityScore
 from train_config import seq_config as configs
-from utils.utils import set_random_seed
+from utils.utils import set_random_seed, ddp_reduce_mean
 from data_process.seq_dataloader import data_generator, data_generator_ddp
 from callback.adversarial import FGM
+
 
 LOSS_FUNC_LIST = {"cross_entropy": CrossEntropyLoss(),
                   "label_smooth": LabelSmoothingCrossEntropy(),
                   "focal": FocalLoss()}
-
-
-def ddp_reduce_mean(loss_data, nprocs):
-    rt = loss_data.clone()
-    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
-    rt /= nprocs
-    return rt
 
 
 def train(model, dataloader, epoch, optimizer, scheduler, device):
@@ -118,7 +112,7 @@ def main():
         decay_steps = configs.step_scheduler["decay_steps"]
         scheduler = StepLR(optimizer, step_size=decay_steps, gamma=decay_rate)
     elif configs.scheduler == "Linear":
-        scheduler = get_scheduler("linear", optimizer, 0, configs.num_train_epoch * len(train_dataloader))
+        scheduler = LinearLR(optimizer, 1, 0.1, configs.num_train_epoch * len(train_dataloader))
     else:
         scheduler = None
     metrics = SeqEntityScore()
@@ -262,7 +256,7 @@ def main_ddp():
         decay_steps = configs.step_scheduler["decay_steps"]
         scheduler = StepLR(optimizer, step_size=decay_steps, gamma=decay_rate)
     elif configs.scheduler == "Linear":
-        scheduler = get_scheduler("linear", optimizer, 0, configs.num_train_epoch * len(train_dataloader))
+        scheduler = LinearLR(optimizer, 1, 0.1, configs.num_train_epoch * len(train_dataloader))
     else:
         scheduler = None
     metrics = SeqEntityScore()

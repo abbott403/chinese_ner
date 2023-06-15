@@ -6,8 +6,7 @@ class BertSoftmax(BertPreTrainedModel):
     def __init__(self, bert_config, num_labels, hidden_dropout_prob):
         super(BertSoftmax, self).__init__(bert_config)
 
-        bert_model = BertModel(bert_config, add_pooling_layer=False)
-        self.bert = bert_model.from_pretrained("third_party_weights/bert_base_chinese/")
+        self.bert = BertModel(bert_config, add_pooling_layer=False).from_pretrained("third_party_weights/bert_base_chinese/")
         self.dropout = nn.Dropout(hidden_dropout_prob)
         self.classifier = nn.Linear(self.bert.config.hidden_size, num_labels)
 

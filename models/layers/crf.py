@@ -81,6 +81,9 @@ class CRF(nn.Module):
             mask = mask.byte()
         self._validate(emissions, tags=tags, mask=mask)
 
+        zeros = torch.zeros_like(tags)
+        tags = torch.where(tags < 0, zeros, tags)
+
         if self.batch_first:
             emissions = emissions.transpose(0, 1)
             tags = tags.transpose(0, 1)
@@ -123,8 +126,7 @@ class CRF(nn.Module):
         if nbest is None:
             nbest = 1
         if mask is None:
-            mask = torch.ones(emissions.shape[:2], dtype=torch.uint8,
-                              device=emissions.device)
+            mask = torch.ones(emissions.shape[:2], dtype=torch.uint8, device=emissions.device)
         if mask.dtype != torch.uint8:
             mask = mask.byte()
         self._validate(emissions, mask=mask)

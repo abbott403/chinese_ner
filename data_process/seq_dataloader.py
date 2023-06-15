@@ -134,16 +134,19 @@ if __name__ == "__main__":
                                                        add_special_tokens=True,
                                                        do_lower_case=False)
     data_coll = DataCollate(test_tokenizer)
-    train_loader = DataLoader(SeqDataset(train_datas), batch_size=5, shuffle=True,
+    train_loader = DataLoader(SeqDataset(train_datas), batch_size=2, shuffle=True,
                               num_workers=1, drop_last=False,
                               collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
 
     batch_X = next(iter(train_loader))
-    # print(batch_X)
-    for k in range(5):
-        encoded_sequence = batch_X[0][k]
-        print(test_tokenizer.decode(encoded_sequence))
-
-        encoded_label = batch_X[3][k].numpy().tolist()
-        print(encoded_label)
-        print([configs.id2ent[i] for i in encoded_label if i != -100])
+    print(batch_X[3])
+    zeros = torch.zeros_like(batch_X[3])
+    tags = torch.where(batch_X[3] < 0, zeros, batch_X[3])
+    print(tags)
+    # for k in range(5):
+    #     encoded_sequence = batch_X[0][k]
+    #     print(test_tokenizer.decode(encoded_sequence))
+    #
+    #     encoded_label = batch_X[3][k].numpy().tolist()
+    #     print(encoded_label)
+    #     print([configs.id2ent[i] for i in encoded_label if i != -100])

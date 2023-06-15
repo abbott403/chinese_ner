@@ -1,5 +1,6 @@
 ent2id = {"address": 0, "book": 1, "company": 2, "game": 3, "government": 4, "movie": 5, "name": 6, "organization": 7,
           "position": 8, "scene": 9}
+id2ent = {idx: label for label, idx in ent2id.items()}
 cawr_scheduler = {"T_mult": 1, "rewarm_epoch_num": 2}
 step_scheduler = {"decay_rate": 0.999, "decay_steps": 200}
 f1_save_threshold = 0.79

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import os
 from train_config import span_config as configs
 from load_ner_data import load_data
@@ -51,80 +52,69 @@ class DataCollate:
 
         return ent2token_spans
 
-    def generate_inputs(self, datas, max_seq_len, ent2id, data_type="train"):
+    def generate_inputs(self, datas, ent2id):
         """
         生成喂入模型的数据
         Args:
             datas (list): json格式的数据[{'text':'','entity_list':[(start,end,ent_type),()]}]
-            max_seq_len (int): 句子最大token数量
             ent2id (dict): ent到id的映射
-            data_type (str, optional): data类型. Defaults to "train".
 
         Returns:
-            list: [(sample, input_ids, attention_mask, token_type_ids, labels),(),()...]
+            list: [(input_ids, attention_mask, token_type_ids, labels),(),()...]
         """
+        batch_size = len(datas)
 
-        all_inputs = []
+        batch_sentence = []
         for sample in datas:
-            inputs = self.tokenizer(
-                sample["text"],
-                max_length=max_seq_len,
-                truncation=True,
-                padding='max_length'
-            )
+            batch_sentence.append(sample['text'])
+        batch_inputs = self.tokenizer(
+            batch_sentence,
+            padding=True,
+            return_tensors="pt")
+        max_seq_len = batch_inputs['input_ids'].shape[1]
+        start_ids = np.zeros((batch_size, max_seq_len))
+        end_ids = np.zeros((batch_size, max_seq_len))
 
-            start_ids = None
-            end_ids = None
-            if data_type != "predict":
-                ent2token_spans = self.get_ent2token_spans(sample["text"], sample["entity_list"])
-                start_ids = np.zeros(max_seq_len)
-                end_ids = np.zeros(max_seq_len)
-                for start, end, label in ent2token_spans:
-                    start_ids[start] = ent2id[label]
-                    end_ids[end] = ent2id[label]
+        for batch_idx, sample in enumerate(datas):
+            input_data = self.tokenizer(sample["text"])
 
-            input_ids = torch.tensor(inputs["input_ids"]).long()
-            attention_mask = torch.tensor(inputs["attention_mask"]).long()
-            token_type_ids = torch.tensor(inputs["token_type_ids"]).long()
-            if start_ids is not None:
-                start_ids = torch.tensor(start_ids).long()
-                end_ids = torch.tensor(end_ids).long()
+            for start, end, tag, _ in sample["entity_list"]:
+                token_start = input_data.char_to_token(start)
+                token_end = input_data.char_to_token(end)
 
-            sample_input = (sample, input_ids, attention_mask, token_type_ids, start_ids, end_ids)
+                start_ids[batch_idx][token_start] = ent2id[tag]
+                end_ids[batch_idx][token_end] = ent2id[tag]
 
-            all_inputs.append(sample_input)
-        return all_inputs
+        return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
+               torch.tensor(start_ids), torch.tensor(end_ids)
 
-    def generate_batch(self, batch_data, max_seq_len, ent2id, data_type="train"):
-        batch_data = self.generate_inputs(batch_data, max_seq_len, ent2id, data_type)
-        sample_list = []
+    def generate_batch(self, batch_data, ent2id):
+        input_ids, token_type_ids, attention_mask, start_ids, end_ids = self.generate_inputs(batch_data, ent2id)
         input_ids_list = []
         attention_mask_list = []
         token_type_ids_list = []
         start_ids_list = []
         end_ids_list = []
 
-        for sample in batch_data:
-            sample_list.append(sample[0])
-            input_ids_list.append(sample[1])
-            attention_mask_list.append(sample[2])
-            token_type_ids_list.append(sample[3])
-            if data_type != "predict":
-                start_ids_list.append(sample[4])
-                end_ids_list.append(sample[5])
+        for sample in zip(input_ids, token_type_ids, attention_mask, start_ids, end_ids):
+            input_ids_list.append(sample[0])
+            attention_mask_list.append(sample[1])
+            token_type_ids_list.append(sample[2])
+            start_ids_list.append(sample[3])
+            end_ids_list.append(sample[4])
 
         batch_input_ids = torch.stack(input_ids_list, dim=0)
         batch_attention_mask = torch.stack(attention_mask_list, dim=0)
         batch_token_type_ids = torch.stack(token_type_ids_list, dim=0)
-        batch_start_ids = torch.stack(start_ids_list, dim=0) if data_type != "predict" else None
-        batch_end_ids = torch.stack(end_ids_list, dim=0) if data_type != "predict" else None
+        batch_start_ids = torch.stack(start_ids_list, dim=0)
+        batch_end_ids = torch.stack(end_ids_list, dim=0)
 
-        return sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_start_ids, batch_end_ids
+        return batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_start_ids, batch_end_ids
 
 
 def data_generator(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "train.json")
-    dev_data_path = os.path.join(configs.train_data_path, "dev.json")
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
     dev_data = load_data(dev_data_path)
@@ -136,14 +126,54 @@ def data_generator(tokenizer):
         max_token_num = max(max_token_num, len(tokens))
 
     assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
-    max_seq_len = min(max_token_num, configs.max_len)
 
     data_collate = DataCollate(tokenizer)
     train_dataloader = DataLoader(SpanDataset(train_data), batch_size=configs.batch_size, shuffle=True,
                                   num_workers=configs.num_work_load, drop_last=False,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, max_seq_len, configs.ent2id))
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
     valid_dataloader = DataLoader(SpanDataset(dev_data), batch_size=configs.batch_size,
                                   num_workers=configs.num_work_load, drop_last=False,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, max_seq_len, configs.ent2id))
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
 
     return train_dataloader, valid_dataloader
+
+
+def data_generator_ddp(tokenizer):
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
+
+    train_data = load_data(train_data_path)
+    dev_data = load_data(dev_data_path)
+
+    data_collate = DataCollate(tokenizer)
+
+    train_dataset = SpanDataset(train_data)
+    train_sampler = DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
+                                  num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
+
+    dev_dataset = SpanDataset(dev_data)
+    dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
+                                num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
+
+    return train_dataloader, dev_dataloader, train_sampler
+
+
+if __name__ == "__main__":
+    from transformers import BertTokenizerFast
+
+    train_path = os.path.join("../", configs.train_data_path, "train.txt")
+    train_datas = load_data(train_path)
+
+    test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
+                                                       add_special_tokens=True,
+                                                       do_lower_case=False)
+    data_coll = DataCollate(test_tokenizer)
+    train_loader = DataLoader(SpanDataset(train_datas), batch_size=2, shuffle=True,
+                              num_workers=1, drop_last=False,
+                              collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
+
+    batch_X = next(iter(train_loader))
+    print(batch_X)

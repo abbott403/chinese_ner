@@ -1,7 +1,9 @@
 import torch
+from torch import distributed as dist
 import numpy as np
 import argparse
-from train_config import global_point_config as configs
+from train_config import global_point_config as g_configs
+from train_config import seq_config as s_configs
 
 
 def set_random_seed(seed_value=0):
@@ -21,12 +23,11 @@ def set_random_seed(seed_value=0):
 
 def decode_ent(text, pred_matrix, tokenizer, threshold=0):
     token2char_span_mapping = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
-    id2ent = {idx: ent for ent, idx in configs.ent2id.items()}
     pred_matrix = pred_matrix.cpu().numpy()
     ent_list = {}
 
     for ent_type_id, token_start_index, token_end_index in zip(*np.where(pred_matrix > threshold)):
-        ent_type = id2ent[ent_type_id]
+        ent_type = g_configs.id2ent[ent_type_id]
         ent_char_span = [token2char_span_mapping[token_start_index][0], token2char_span_mapping[token_end_index][1]]
         ent_text = text[ent_char_span[0]: ent_char_span[1]]
 
@@ -37,6 +38,42 @@ def decode_ent(text, pred_matrix, tokenizer, threshold=0):
         ent_list.update({ent_type: ent_type_dict})
 
     return ent_list
+
+
+def softmax_decode_ent(text, pred_matrix, tokenizer):
+    token2char_span_mapping = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
+    probabilities = torch.nn.functional.softmax(pred_matrix, dim=-1)[0].cpu().numpy().tolist()
+    predictions = pred_matrix.argmax(dim=-1)[0].cpu().numpy().tolist()
+    pred_label = []
+
+    idx = 0
+    while idx < len(predictions):
+        pred = predictions[idx]
+        label = s_configs.id2ent[pred]
+        if label != "O":
+            label = label[2:]  # Remove the B- or I-
+            start, end = token2char_span_mapping[idx]
+            all_scores = [probabilities[idx][pred]]
+            # Grab all the tokens labeled with I-label
+            while idx + 1 < len(predictions) and s_configs.id2ent[predictions[idx + 1]] == f"I-{label}":
+                all_scores.append(probabilities[idx + 1][predictions[idx + 1]])
+                _, end = token2char_span_mapping[idx + 1]
+                idx += 1
+
+            score = np.mean(all_scores).item()
+            word = text[start:end]
+            pred_label.append(
+                {
+                    "entity_label": label,
+                    "score": score,
+                    "word": word,
+                    "start": start,
+                    "end": end,
+                }
+            )
+        idx += 1
+
+    return pred_label
 
 
 def get_entity_bios(seq):
@@ -121,19 +158,6 @@ def get_entity_bio(seq):
     return chunks
 
 
-def get_entities(seq, markup='bios'):
-    """
-    :param seq:
-    :param markup:
-    :return:
-    """
-    assert markup in ['bio', 'bios']
-    if markup == 'bio':
-        return get_entity_bio(seq)
-    else:
-        return get_entity_bios(seq)
-
-
 def get_parse_args():
     parser = argparse.ArgumentParser(description="training global pointer model")
     parser.add_argument("--local_rank", default=-1)
@@ -143,7 +167,7 @@ def get_parse_args():
 
 
 def bert_extract_item(start_logits, end_logits):
-    S = []
+    res = []
     start_pred = torch.argmax(start_logits, -1).cpu().numpy()[0][1:-1]
     end_pred = torch.argmax(end_logits, -1).cpu().numpy()[0][1:-1]
     for i, s_l in enumerate(start_pred):
@@ -151,6 +175,13 @@ def bert_extract_item(start_logits, end_logits):
             continue
         for j, e_l in enumerate(end_pred[i:]):
             if s_l == e_l:
-                S.append((s_l, i, i + j))
+                res.append((s_l, i, i + j))
                 break
-    return S
+    return res
+
+
+def ddp_reduce_mean(loss_data, nprocs):
+    rt = loss_data.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= nprocs
+    return rt
