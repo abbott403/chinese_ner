@@ -1,6 +1,7 @@
 import torch
 from torch.nn import functional as F
 from torch import nn
+from torch.nn import CrossEntropyLoss
 
 
 def multilabel_categorical_crossentropy(y_true, y_pred):
@@ -59,9 +60,21 @@ class FocalLoss(nn.Module):
         """
         input: [N, C]
         target: [N, ]
+
         """
         logpt = F.log_softmax(logits, dim=1)
         pt = torch.exp(logpt)
         logpt = (1 - pt) ** self.gamma * logpt
         loss = F.nll_loss(logpt, target, self.weight, ignore_index=self.ignore_index)
         return loss
+
+
+def get_loss_function(weight, loss_type):
+    if loss_type == "cross_entropy":
+        loss_fun = CrossEntropyLoss(weight)
+    elif loss_type == "focal":
+        loss_fun = FocalLoss(weight=weight)
+    else:
+        loss_fun = LabelSmoothingCrossEntropy()
+
+    return loss_fun

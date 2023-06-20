@@ -1,4 +1,4 @@
-entities = ["O", "B-LOC", "I-LOC", "B-ORG", "I-ORG", "B-PER", "I-PER"]
+entities = ["O", "LOC", "ORG", "PER"]
 ent2id = {ent: idx for idx, ent in enumerate(entities)}
 id2ent = {idx: ent for idx, ent in enumerate(entities)}
 
@@ -22,3 +22,4 @@ nprocs_per_node = 4
 use_attack = False
 use_amp = False
 loss_type = "focal"
+soft_label = True

@@ -6,16 +6,7 @@ from transformers import BertTokenizerFast
 from models.global_point import GlobalPoint
 from data_process.global_point_dataloader import GlobalPointDataset
 from torch.utils.data import DataLoader
-from utils.utils import decode_ent
-
-
-def load_data(data_path):
-    datas = []
-    with open(data_path, encoding="utf-8") as f:
-        for line in f:
-            line = json.loads(line)
-            datas.append(line["text"])
-    return datas
+from utils.utils import global_decode_ent, load_data
 
 
 class DataCollate:
@@ -73,7 +64,7 @@ def predict(dataloader, model, device, tokenizer):
         for ind in range(len(batch_sample)):
             text = batch_sample[ind]
             pred_matrix = batch_logits[ind]
-            labels = decode_ent(text, pred_matrix, tokenizer)
+            labels = global_decode_ent(text, pred_matrix, tokenizer)
             predict_res.append({"text": text, "label": labels})
     return predict_res
 

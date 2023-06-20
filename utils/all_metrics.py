@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from collections import Counter
-from utils.utils import get_entities
+from utils.utils import get_entity_bio
 
 
 class GlobalPointerScore:
@@ -38,9 +38,10 @@ class GlobalPointerScore:
 
 
 class SeqEntityScore(object):
-    def __init__(self, markup='bio'):
-        self.markup = markup
-        self.reset()
+    def __init__(self):
+        self.origins = []
+        self.founds = []
+        self.rights = []
 
     def reset(self):
         self.origins = []
@@ -83,8 +84,8 @@ class SeqEntityScore(object):
         #    >>> pred_paths = [['O', 'O', 'B-MISC', 'I-MISC', 'I-MISC', 'I-MISC', 'O'], ['B-PER', 'I-PER', 'O']]
         """
         for label_path, pre_path in zip(label_paths, pred_paths):
-            label_entities = get_entities(label_path, self.markup)
-            pre_entities = get_entities(pre_path, self.markup)
+            label_entities = get_entity_bio(label_path)
+            pre_entities = get_entity_bio(pre_path)
             self.origins.extend(label_entities)
             self.founds.extend(pre_entities)
             self.rights.extend([pre_entity for pre_entity in pre_entities if pre_entity in label_entities])
@@ -124,6 +125,7 @@ class SpanEntityScore(object):
         return {'acc': precision, 'recall': recall, 'f1': f1}, class_info
 
     def update(self, true_subject, pred_subject):
-        self.origins.extend(true_subject)
-        self.founds.extend(pred_subject)
-        self.rights.extend([pre_entity for pre_entity in pred_subject if pre_entity in true_subject])
+        for batch_true, batch_pred in zip(true_subject, pred_subject):
+            self.origins.extend(batch_true)
+            self.founds.extend(batch_pred)
+            self.rights.extend([pre_entity for pre_entity in pred_subject if pre_entity in true_subject])

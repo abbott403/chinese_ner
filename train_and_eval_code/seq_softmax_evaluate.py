@@ -6,16 +6,7 @@ from transformers import BertTokenizerFast, BertConfig
 from models.softmax_ner import BertSoftmax
 from data_process.seq_dataloader import SeqDataset
 from torch.utils.data import DataLoader
-from utils.utils import softmax_decode_ent
-
-
-def load_data(data_path):
-    datas = []
-    with open(data_path, encoding="utf-8") as f:
-        for line in f:
-            line = json.loads(line)
-            datas.append(line["text"])
-    return datas
+from utils.utils import softmax_decode_ent, load_data
 
 
 class DataCollate:

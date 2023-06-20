@@ -6,16 +6,7 @@ from transformers import BertTokenizerFast, BertConfig
 from models.crf_ner import BertCrf
 from data_process.seq_dataloader import SeqDataset
 from torch.utils.data import DataLoader
-from utils.utils import get_entity_bio
-
-
-def load_data(data_path):
-    datas = []
-    with open(data_path, encoding="utf-8") as f:
-        for line in f:
-            line = json.loads(line)
-            datas.append(line["text"])
-    return datas
+from utils.utils import crf_decode_ent, load_data
 
 
 class DataCollate:
@@ -73,7 +64,7 @@ def predict(dataloader, model, device, tokenizer):
         for ind in range(len(batch_sample)):
             text = batch_sample[ind]
             pred_matrix = batch_logits[ind]
-            labels = decode_ent(text, pred_matrix, tokenizer)
+            labels = crf_decode_ent(text, pred_matrix, tokenizer)
             predict_res.append({"text": text, "label": labels})
     return predict_res
 

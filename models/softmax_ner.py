@@ -13,6 +13,7 @@ class BertSoftmax(BertPreTrainedModel):
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
         outputs = self.bert(input_ids, attention_mask, token_type_ids)
         sequence_output = self.dropout(outputs.last_hidden_state)
+        # sequence_output = outputs.last_hidden_state
         logits = self.classifier(sequence_output)
         # outputs = (logits,) + outputs[2:]
 

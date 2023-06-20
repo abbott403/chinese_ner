@@ -25,33 +25,6 @@ class DataCollate:
         self.tokenizer = tokenizer
         self.add_special_tokens = add_special_tokens
 
-    def get_ent2token_spans(self, text, entity_list):
-        ent2token_spans = []
-        input_data = self.tokenizer(text, add_special_tokens=self.add_special_tokens, return_offsets_mapping=True)
-        token2char_span_mapping = input_data["offset_mapping"]
-        text2tokens = self.tokenizer.tokenize(text, add_special_tokens=self.add_special_tokens)
-
-        for ent_span in entity_list:
-            start, end = ent_span[0], ent_span[1]
-            ent = text[start:end+1]
-            ent2token = self.tokenizer.tokenize(ent, add_special_tokens=False)
-
-            # 寻找ent的token_span
-            token_start_indexs = [i for i, v in enumerate(text2tokens) if v == ent2token[0]]
-            token_end_indexs = [i for i, v in enumerate(text2tokens) if v == ent2token[-1]]
-
-            token_start_index = list(filter(lambda x: token2char_span_mapping[x][0] == ent_span[0], token_start_indexs))
-            # token2char_span_mapping[x][-1]-1 减1是因为原始的char_span是闭区间，而token2char_span是开区间
-            token_end_index = list(filter(lambda x: token2char_span_mapping[x][-1]-1 == ent_span[1], token_end_indexs))
-
-            if len(token_start_index) == 0 or len(token_end_index) == 0:
-                # print(f'[{ent}] 无法对应到 [{text}] 的token_span，已丢弃')
-                continue
-            token_span = (token_start_index[0], token_end_index[0], ent_span[2])
-            ent2token_spans.append(token_span)
-
-        return ent2token_spans
-
     def generate_inputs(self, datas, ent2id):
         """
         生成喂入模型的数据
@@ -63,6 +36,7 @@ class DataCollate:
             list: [(input_ids, attention_mask, token_type_ids, labels),(),()...]
         """
         batch_size = len(datas)
+        entity_list = []
 
         batch_sentence = []
         for sample in datas:
@@ -77,6 +51,11 @@ class DataCollate:
 
         for batch_idx, sample in enumerate(datas):
             input_data = self.tokenizer(sample["text"])
+            start_ids[batch_idx][0] = -100
+            start_ids[batch_idx][len(input_data.tokens()) - 1:] = -100
+            end_ids[batch_idx][0] = -100
+            end_ids[batch_idx][len(input_data.tokens()) - 1:] = -100
+            sample_entity_list = []
 
             for start, end, tag, _ in sample["entity_list"]:
                 token_start = input_data.char_to_token(start)
@@ -84,12 +63,13 @@ class DataCollate:
 
                 start_ids[batch_idx][token_start] = ent2id[tag]
                 end_ids[batch_idx][token_end] = ent2id[tag]
+                sample_entity_list.append([start, end, tag[2:]])
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
-               torch.tensor(start_ids), torch.tensor(end_ids)
+               torch.tensor(start_ids), torch.tensor(end_ids), entity_list
 
     def generate_batch(self, batch_data, ent2id):
-        input_ids, token_type_ids, attention_mask, start_ids, end_ids = self.generate_inputs(batch_data, ent2id)
+        input_ids, token_type_ids, attention_mask, start_ids, end_ids, entity_list = self.generate_inputs(batch_data, ent2id)
         input_ids_list = []
         attention_mask_list = []
         token_type_ids_list = []
@@ -109,7 +89,7 @@ class DataCollate:
         batch_start_ids = torch.stack(start_ids_list, dim=0)
         batch_end_ids = torch.stack(end_ids_list, dim=0)
 
-        return batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_start_ids, batch_end_ids
+        return batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_start_ids, batch_end_ids, entity_list
 
 
 def data_generator(tokenizer):

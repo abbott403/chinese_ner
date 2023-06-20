@@ -5,6 +5,7 @@ from torch.utils.data.distributed import DistributedSampler
 import os
 from train_config import seq_config as configs
 from data_process.load_ner_data import load_data
+from utils.utils import filter_data
 
 
 class SeqDataset(Dataset):
@@ -71,8 +72,8 @@ class DataCollate:
 
         for sample in zip(input_ids, token_type_ids, attention_mask, batch_label):
             input_ids_list.append(sample[0])
-            attention_mask_list.append(sample[1])
-            token_type_ids_list.append(sample[2])
+            token_type_ids_list.append(sample[1])
+            attention_mask_list.append(sample[2])
             labels_list.append(sample[3])
 
         batch_input_ids = torch.stack(input_ids_list, dim=0)
@@ -88,6 +89,7 @@ def data_generator(tokenizer):
     dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
+    train_data = filter_data(train_data)
     dev_data = load_data(dev_data_path)
 
     data_collate = DataCollate(tokenizer)
@@ -106,6 +108,7 @@ def data_generator_ddp(tokenizer):
     dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
+    train_data = filter_data(train_data)
     dev_data = load_data(dev_data_path)
 
     data_collate = DataCollate(tokenizer)
@@ -127,19 +130,19 @@ def data_generator_ddp(tokenizer):
 if __name__ == "__main__":
     from transformers import BertTokenizerFast
 
-    train_path = os.path.join("../", configs.train_data_path, "train.txt")
+    train_path = os.path.join("../", configs.train_data_path, "test.txt")
     train_datas = load_data(train_path)
 
     test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
                                                        add_special_tokens=True,
                                                        do_lower_case=False)
     data_coll = DataCollate(test_tokenizer)
-    train_loader = DataLoader(SeqDataset(train_datas), batch_size=2, shuffle=True,
+    train_loader = DataLoader(SeqDataset(train_datas), batch_size=4, shuffle=False,
                               num_workers=1, drop_last=False,
                               collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
 
     batch_X = next(iter(train_loader))
-    print(batch_X[3])
+    print(batch_X)
     zeros = torch.zeros_like(batch_X[3])
     tags = torch.where(batch_X[3] < 0, zeros, batch_X[3])
     print(tags)
