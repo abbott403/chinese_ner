@@ -4,7 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import os
 from train_config import span_config as configs
-from load_ner_data import load_data
+from data_process.load_ner_data import load_data
 
 
 class SpanDataset(Dataset):
@@ -61,9 +61,11 @@ class DataCollate:
                 token_start = input_data.char_to_token(start)
                 token_end = input_data.char_to_token(end)
 
-                start_ids[batch_idx][token_start] = ent2id[tag]
-                end_ids[batch_idx][token_end] = ent2id[tag]
+                start_ids[batch_idx][token_start] = ent2id[tag[2:]]
+                end_ids[batch_idx][token_end] = ent2id[tag[2:]]
                 sample_entity_list.append([start, end, tag[2:]])
+
+            entity_list.append(sample_entity_list)
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
                torch.tensor(start_ids), torch.tensor(end_ids), entity_list
@@ -78,8 +80,8 @@ class DataCollate:
 
         for sample in zip(input_ids, token_type_ids, attention_mask, start_ids, end_ids):
             input_ids_list.append(sample[0])
-            attention_mask_list.append(sample[1])
-            token_type_ids_list.append(sample[2])
+            token_type_ids_list.append(sample[1])
+            attention_mask_list.append(sample[2])
             start_ids_list.append(sample[3])
             end_ids_list.append(sample[4])
 

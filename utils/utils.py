@@ -202,7 +202,7 @@ def span_extract_item(start_logits, end_logits):
                 continue
             for j, e_l in enumerate(end_sample[i:]):
                 if s_l == e_l:
-                    res.append([i, i + j, s_l])
+                    res.append([s_l, i, i + j])
                     break
     return res
 

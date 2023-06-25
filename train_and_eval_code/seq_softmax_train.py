@@ -107,7 +107,7 @@ def main():
     freeze_weight(model, unfreeze_layer)
     model = model.to(device)
 
-    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.learning_rate)
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.softmax_learning_rate)
     label_weight = torch.tensor([1, 10, 10, 10, 10, 10, 10], dtype=torch.float).to(device)
     loss_fn = get_loss_function(label_weight, configs.loss_type)
 
@@ -269,7 +269,7 @@ def main_ddp():
 
     fgm = FGM(model, epsilon=1) if configs.use_attack else None
     scaler = GradScaler() if configs.use_amp else None
-    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.learning_rate)
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.softmax_learning_rate)
     label_weight = torch.tensor([1, 10, 10, 10, 10, 10, 10], dtype=torch.float).to(device)
     loss_fn = get_loss_function(label_weight, configs.loss_type)
 

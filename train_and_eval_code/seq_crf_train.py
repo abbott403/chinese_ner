@@ -8,11 +8,12 @@ from torch.cuda.amp import GradScaler
 from transformers import BertTokenizerFast, get_scheduler, BertConfig
 import os
 from tqdm import tqdm
+from sklearn.metrics import classification_report
 
 from models.crf_ner import BertCrf
 from utils.all_metrics import SeqEntityScore
 from train_config import seq_config as configs
-from utils.utils import set_random_seed, ddp_reduce_mean
+from utils.utils import set_random_seed, ddp_reduce_mean, freeze_weight
 from data_process.seq_dataloader import data_generator, data_generator_ddp
 from callback.adversarial import FGM
 
@@ -30,9 +31,10 @@ def train(model, dataloader, epoch, optimizer, scheduler, device):
                                                                                      batch_token_type_ids.to(device),
                                                                                      batch_labels.to(device))
 
-        loss, _ = model(batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels)
+        loss, _ = model(batch_input_ids, batch_token_type_ids, batch_attention_mask, batch_labels)
         optimizer.zero_grad()
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
         optimizer.step()
 
         total_loss += loss.item()
@@ -58,18 +60,21 @@ def valid(model, dataloader, metrics, device):
                                                                        batch_attention_mask.to(device),
                                                                        batch_token_type_ids.to(device))
         with torch.no_grad():
-            logits = model(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+            logits = model(batch_input_ids, batch_token_type_ids, batch_attention_mask)
         predictions = logits.squeeze().cpu().numpy().tolist()
         labels = batch_labels.numpy().tolist()
         prediction_symbol += [[configs.id2ent[int(p)] for (p, l) in zip(prediction, label) if l != -100]
                               for prediction, label in zip(predictions, labels)]
         label_symbol += [[configs.id2ent[int(l)] for l in label if l != -100] for label in labels]
 
+    flat_prediction = sum(prediction_symbol, [])
+    flat_label = sum(label_symbol, [])
+    print(classification_report(flat_label, flat_prediction))
     metrics.update(label_symbol, prediction_symbol)
     eval_info, entity_info = metrics.result()
 
     print("******************************************")
-    print(eval_info, "\n")
+    print(eval_info)
     print("******************************************")
     print(entity_info)
     return eval_info["f1"]
@@ -90,8 +95,20 @@ def main():
 
     bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
     model = BertCrf(bert_config, ent_type_size, configs.dropout_rate)
+    unfreeze_layer = ["layer.10", "layer.11", "classifier.", "crf."]
+    freeze_weight(model, unfreeze_layer)
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=configs.learning_rate)
+
+    bert_param_optimizer = list(model.bert.named_parameters())
+    crf_param_optimizer = list(model.crf.named_parameters())
+    linear_param_optimizer = list(model.classifier.named_parameters())
+    optimizer_grouped_parameters = [
+        {"params": [param for name, param in bert_param_optimizer if any(nd in name for nd in unfreeze_layer)],
+         "lr": configs.crf_learning_rate},
+        {"params": [param for name, param in crf_param_optimizer], "lr": configs.crf_learning_rate * 100},
+        {"params": [param for name, param in linear_param_optimizer], "lr": configs.crf_learning_rate * 100}
+    ]
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
 
     if configs.scheduler == "CAWR":
         T_mult = configs.cawr_scheduler["T_mult"]
@@ -117,7 +134,7 @@ def main():
             max_f1 = valid_f1
             if max_f1 > configs.f1_save_threshold:
                 model_f1_val = int(round(max_f1, 3) * 1000)
-                torch.save(model.state_dict(), os.path.join(configs.model_save_path, "gp_{}.pt".format(model_f1_val)))
+                torch.save(model.state_dict(), os.path.join(configs.model_save_path, "crf_{}.pt".format(model_f1_val)))
 
         print(f"Best F1: {max_f1}")
 
@@ -138,7 +155,7 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
 
         if configs.use_amp:
             with autocast():
-                loss, _ = model(batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels)
+                loss, _ = model(batch_input_ids, batch_token_type_ids, batch_attention_mask, batch_labels)
             dist.barrier()
 
             amp_scaler.scale(loss).backward()
@@ -146,27 +163,29 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
             if configs.use_attack:
                 adversarial.attack()
                 with autocast():
-                    loss_dev, _ = model(batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels)
+                    loss_dev, _ = model(batch_input_ids, batch_token_type_ids, batch_attention_mask, batch_labels)
 
                 dist.barrier()
                 amp_scaler.scale(loss_dev).backward()
                 adversarial.restore()
 
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
             amp_scaler.step(optimizer)
             amp_scaler.update()
         else:
-            loss, _ = model(batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels)
+            loss, _ = model(batch_input_ids, batch_token_type_ids, batch_attention_mask, batch_labels)
             dist.barrier()
             loss.backward()
 
             if configs.use_attack:
                 adversarial.attack()  # 在embedding上添加对抗扰动
-                loss_dev, _ = model(batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_labels)
+                loss_dev, _ = model(batch_input_ids, batch_token_type_ids, batch_attention_mask, batch_labels)
 
                 dist.barrier()
                 loss_dev.backward()  # 反向传播，并在正常的grad基础上，累加对抗训练的梯度
                 adversarial.restore()  # 恢复embedding参数
 
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
             optimizer.step()
             if scheduler is not None:
                 scheduler.step()
@@ -189,7 +208,7 @@ def valid_ddp(model, dataloader, metrics, device):
                                                                        batch_attention_mask.to(device),
                                                                        batch_token_type_ids.to(device))
         with torch.no_grad():
-            logits = model.module(batch_input_ids, batch_attention_mask, batch_token_type_ids)
+            logits = model.module(batch_input_ids, batch_token_type_ids, batch_attention_mask)
 
         predictions = logits.squeeze().cpu().numpy().tolist()
         labels = batch_labels.numpy().tolist()
@@ -200,9 +219,9 @@ def valid_ddp(model, dataloader, metrics, device):
     metrics.update(label_symbol, prediction_symbol)
     eval_info, entity_info = metrics.result()
 
-    print("******************************************\n")
-    print(eval_info, "\n")
-    print("******************************************\n")
+    print("******************************************")
+    print(eval_info)
+    print("******************************************")
     print(entity_info)
     return eval_info["f1"]
 
@@ -227,12 +246,25 @@ def main_ddp():
 
     bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
     model = BertCrf(bert_config, ent_type_size, configs.dropout_rate)
+    unfreeze_layer = ["layer.10", "layer.11", "classifier.", "crf."]
+    freeze_weight(model, unfreeze_layer)
     model = model.to(device)
+
+    bert_param_optimizer = list(model.bert.named_parameters())
+    crf_param_optimizer = list(model.crf.named_parameters())
+    linear_param_optimizer = list(model.classifier.named_parameters())
+    optimizer_grouped_parameters = [
+        {"params": [param for name, param in bert_param_optimizer if any(nd in name for nd in unfreeze_layer)],
+         "lr": configs.crf_learning_rate},
+        {"params": [param for name, param in crf_param_optimizer], "lr": configs.crf_learning_rate * 100},
+        {"params": [param for name, param in linear_param_optimizer], "lr": configs.crf_learning_rate * 100}
+    ]
+
     model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
 
     fgm = FGM(model, epsilon=1) if configs.use_attack else None
     scaler = GradScaler() if configs.use_amp else None
-    optimizer = torch.optim.AdamW(model.parameters(), lr=configs.learning_rate)
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
 
     if configs.scheduler == "CAWR":
         T_mult = configs.cawr_scheduler["T_mult"]
@@ -264,7 +296,7 @@ def main_ddp():
                 if max_f1 > configs.f1_save_threshold:
                     model_f1_val = int(round(max_f1, 3) * 1000)
                     torch.save(model.module.state_dict(),
-                               os.path.join(configs.model_save_path, "gp_{}.pt".format(model_f1_val)))
+                               os.path.join(configs.model_save_path, "crf_{}.pt".format(model_f1_val)))
 
             print(f"Best F1: {max_f1}")
 

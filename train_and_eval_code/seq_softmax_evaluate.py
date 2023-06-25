@@ -39,7 +39,7 @@ def data_generator(tokenizer):
     """
     读取数据，生成DataLoader。
     """
-    predict_data_path = os.path.join("data/", "test.json")
+    predict_data_path = os.path.join("../data/", "test.json")
     predict_data = load_data(predict_data_path)
 
     data_collate = DataCollate(tokenizer)
@@ -75,7 +75,7 @@ def main():
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    tokenizer = BertTokenizerFast.from_pretrained("third_party_weights/bert_base_chinese/", add_special_tokens=True,
+    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/", add_special_tokens=True,
                                                   do_lower_case=False)
     test_dataloader = data_generator(tokenizer)
 

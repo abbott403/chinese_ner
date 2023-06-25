@@ -21,5 +21,5 @@ is_ddp = False
 nprocs_per_node = 4
 use_attack = False
 use_amp = False
-loss_type = "focal"
+loss_type = "cross_entropy"
 soft_label = True
