@@ -92,8 +92,7 @@ class SeqEntityScore(object):
 
 
 class SpanEntityScore(object):
-    def __init__(self, id2label):
-        self.id2label = id2label
+    def __init__(self):
         self.reset()
 
     def reset(self):
@@ -109,9 +108,9 @@ class SpanEntityScore(object):
 
     def result(self):
         class_info = {}
-        origin_counter = Counter([self.id2label[x[0]] for x in self.origins])
-        found_counter = Counter([self.id2label[x[0]] for x in self.founds])
-        right_counter = Counter([self.id2label[x[0]] for x in self.rights])
+        origin_counter = Counter([x[0] for x in self.origins])
+        found_counter = Counter([x[0] for x in self.founds])
+        right_counter = Counter([x[0] for x in self.rights])
         for type_, count in origin_counter.items():
             origin = count
             found = found_counter.get(type_, 0)
@@ -125,7 +124,9 @@ class SpanEntityScore(object):
         return {'acc': precision, 'recall': recall, 'f1': f1}, class_info
 
     def update(self, true_subject, pred_subject):
-        for batch_true, batch_pred in zip(true_subject, pred_subject):
+        for i in range(len(true_subject)):
+            batch_true = true_subject[i]
+            batch_pred = pred_subject[i]
             self.origins.extend(batch_true)
             self.founds.extend(batch_pred)
-            self.rights.extend([pre_entity for pre_entity in pred_subject if pre_entity in true_subject])
+            self.rights.extend([pre_entity for pre_entity in batch_pred if pre_entity in batch_true])

@@ -170,8 +170,9 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
                 adversarial.restore()  # 恢复embedding参数
 
             optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
+
+        if scheduler is not None:
+            scheduler.step()
 
         all_reduce_loss = ddp_reduce_mean(loss, configs.nprocs_per_node)
         total_loss += all_reduce_loss.item()

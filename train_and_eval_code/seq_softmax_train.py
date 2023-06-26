@@ -175,7 +175,7 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
                 amp_scaler.scale(loss_dev).backward()
                 adversarial.restore()
 
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
+            # nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
             amp_scaler.step(optimizer)
             amp_scaler.update()
         else:
@@ -197,10 +197,11 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
                 loss_dev.backward()  # 反向传播，并在正常的grad基础上，累加对抗训练的梯度
                 adversarial.restore()  # 恢复embedding参数
 
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
+            # nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
             optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
+
+        if scheduler is not None:
+            scheduler.step()
 
         all_reduce_loss = ddp_reduce_mean(loss, configs.nprocs_per_node)
         total_loss += all_reduce_loss.item()

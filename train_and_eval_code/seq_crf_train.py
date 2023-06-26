@@ -187,8 +187,9 @@ def train_ddp(model, dataloader, optimizer, scheduler, device, adversarial, amp_
 
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=20, norm_type=2)
             optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
+
+        if scheduler is not None:
+            scheduler.step()
 
         all_reduce_loss = ddp_reduce_mean(loss, configs.nprocs_per_node)
         total_loss += all_reduce_loss.item()

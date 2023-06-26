@@ -5,6 +5,7 @@ from torch.utils.data.distributed import DistributedSampler
 import os
 from train_config import span_config as configs
 from data_process.load_ner_data import load_data
+from utils.utils import filter_data
 
 
 class SpanDataset(Dataset):
@@ -41,10 +42,8 @@ class DataCollate:
         batch_sentence = []
         for sample in datas:
             batch_sentence.append(sample['text'])
-        batch_inputs = self.tokenizer(
-            batch_sentence,
-            padding=True,
-            return_tensors="pt")
+
+        batch_inputs = self.tokenizer(batch_sentence, padding=True, return_tensors="pt")
         max_seq_len = batch_inputs['input_ids'].shape[1]
         start_ids = np.zeros((batch_size, max_seq_len))
         end_ids = np.zeros((batch_size, max_seq_len))
@@ -63,12 +62,12 @@ class DataCollate:
 
                 start_ids[batch_idx][token_start] = ent2id[tag[2:]]
                 end_ids[batch_idx][token_end] = ent2id[tag[2:]]
-                sample_entity_list.append([start, end, tag[2:]])
+                sample_entity_list.append([tag[2:], start, end])
 
             entity_list.append(sample_entity_list)
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
-               torch.tensor(start_ids), torch.tensor(end_ids), entity_list
+               torch.tensor(start_ids, dtype=torch.int64), torch.tensor(end_ids, dtype=torch.int64), entity_list
 
     def generate_batch(self, batch_data, ent2id):
         input_ids, token_type_ids, attention_mask, start_ids, end_ids, entity_list = self.generate_inputs(batch_data, ent2id)
@@ -99,15 +98,16 @@ def data_generator(tokenizer):
     dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
     train_data = load_data(train_data_path)
+    train_data = filter_data(train_data)
     dev_data = load_data(dev_data_path)
-    all_data = train_data + dev_data
-
-    max_token_num = 0
-    for sample in all_data:
-        tokens = tokenizer(sample["text"])["input_ids"]
-        max_token_num = max(max_token_num, len(tokens))
-
-    assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
+    # all_data = train_data + dev_data
+    #
+    # max_token_num = 0
+    # for sample in all_data:
+    #     tokens = tokenizer(sample["text"])["input_ids"]
+    #     max_token_num = max(max_token_num, len(tokens))
+    #
+    # assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
 
     data_collate = DataCollate(tokenizer)
     train_dataloader = DataLoader(SpanDataset(train_data), batch_size=configs.batch_size, shuffle=True,

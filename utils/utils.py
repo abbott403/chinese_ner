@@ -6,6 +6,7 @@ import json
 import argparse
 from train_config import global_point_config as g_configs
 from train_config import seq_config as s_configs
+from train_config import span_config as p_configs
 
 
 def set_random_seed(seed_value=0):
@@ -196,14 +197,17 @@ def span_extract_item(start_logits, end_logits):
     for batch_idx in range(len(start_pred)):
         start_sample = start_pred[batch_idx]
         end_sample = end_pred[batch_idx]
+        batch_res = []
 
         for i, s_l in enumerate(start_sample):
             if s_l == 0:
                 continue
             for j, e_l in enumerate(end_sample[i:]):
                 if s_l == e_l:
-                    res.append([s_l, i, i + j])
+                    batch_res.append([p_configs.id2ent[s_l], i, i + j])
                     break
+
+        res.append(batch_res)
     return res
 
 
