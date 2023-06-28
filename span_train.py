@@ -7,6 +7,7 @@ from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler
 from transformers import BertTokenizerFast, BertConfig
 import os
+import time
 from tqdm import tqdm
 
 from models.span_ner import BertSpan
@@ -103,12 +104,12 @@ def main():
 
     bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
     model = BertSpan(bert_config, ent_type_size, configs.dropout_rate, configs.soft_label)
-    unfreeze_layer = ["layer.11", "start_fc.", "end_fc."]
+    unfreeze_layer = ["layer.10", "layer.11", "start_fc.", "end_fc."]
     freeze_weight(model, unfreeze_layer)
     model = model.to(device)
 
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.learning_rate)
-    label_weight = torch.tensor([1, 50, 50, 50], dtype=torch.float).to(device)
+    label_weight = torch.tensor([1, 20, 20, 20], dtype=torch.float).to(device)
     loss_fn = get_loss_function(label_weight, configs.loss_type)
 
     if configs.scheduler == "CAWR":
@@ -283,7 +284,9 @@ def main_ddp():
     device = torch.device("cuda", local_rank)
 
     if local_rank == 0:
-        output_writer = SummaryWriter("train_logs/span/")
+        local_time = time.localtime(time.time())
+        time_str = time.strftime("%H-%M-%S", local_time)
+        output_writer = SummaryWriter(f"train_logs/span/{time_str}")
 
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
@@ -291,16 +294,35 @@ def main_ddp():
 
     bert_config = BertConfig.from_pretrained(configs.pretrained_model_path)
     model = BertSpan(bert_config, ent_type_size, configs.dropout_rate, configs.soft_label)
-    unfreeze_layer = ["layer.11", "start_fc.", "end_fc."]
-    freeze_weight(model, unfreeze_layer)
+
+    no_decay = ["bias", "LayerNorm.weight"]
+    bert_parameters = model.bert.named_parameters()
+    start_parameters = model.start_fc.named_parameters()
+    end_parameters = model.end_fc.named_parameters()
+    optimizer_grouped_parameters = [
+        {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
+         "weight_decay": 0.01, 'lr': configs.learning_rate},
+        {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+            , 'lr': configs.learning_rate},
+
+        {"params": [p for n, p in start_parameters if not any(nd in n for nd in no_decay)],
+         "weight_decay": 0.01, 'lr': 0.005},
+        {"params": [p for n, p in start_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+            , 'lr': 0.005},
+
+        {"params": [p for n, p in end_parameters if not any(nd in n for nd in no_decay)],
+         "weight_decay": 0.01, 'lr': 0.005},
+        {"params": [p for n, p in end_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+            , 'lr': 0.005},
+    ]
     model = model.to(device)
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)  # , find_unused_parameters=True
 
     fgm = FGM(model, epsilon=1) if configs.use_attack else None
     scaler = GradScaler() if configs.use_amp else None
 
-    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=configs.learning_rate)
-    label_weight = torch.tensor([1, 50, 50, 50], dtype=torch.float).to(device)
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=configs.learning_rate)
+    label_weight = torch.tensor([1, 10, 10, 10], dtype=torch.float).to(device)
     loss_fn = get_loss_function(label_weight, configs.loss_type)
 
     if configs.scheduler == "CAWR":

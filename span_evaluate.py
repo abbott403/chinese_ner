@@ -39,7 +39,7 @@ def data_generator(tokenizer):
     """
     读取数据，生成DataLoader。
     """
-    predict_data_path = os.path.join("../data/", "test.json")
+    predict_data_path = os.path.join("data/msra", "test.txt")
     predict_data = load_data(predict_data_path)
 
     data_collate = DataCollate(tokenizer)
@@ -69,11 +69,12 @@ def predict(dataloader, model, device, tokenizer):
                 continue
 
             token2char_span_mapping = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
-            start, _ = token2char_span_mapping[sample_res[1]]
-            _, end = token2char_span_mapping[sample_res[2]]
+            for label, start_ids, end_ids in sample_res:
+                start, _ = token2char_span_mapping[start_ids]
+                _, end = token2char_span_mapping[end_ids]
 
-            predict_res.append({"text": text, "label": {"entity_label": sample_res[0], "word": text[start:end],
-                                                        "start": start, "end": end}})
+                predict_res.append({"text": text, "label": {"entity_label": label, "word": text[start:end],
+                                                            "start": start, "end": end}})
     return predict_res
 
 
@@ -94,7 +95,7 @@ def main():
 
     predict_res = predict(test_dataloader, model, device, tokenizer)
 
-    save_path = "./predict_result.json"
+    save_path = "./predict_res.json"
     with open(save_path, "w", encoding="utf-8") as f:
         for item in predict_res:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")

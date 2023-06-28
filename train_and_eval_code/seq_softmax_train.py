@@ -9,6 +9,7 @@ from transformers import BertTokenizerFast, BertConfig
 import os
 from tqdm import tqdm
 from sklearn.metrics import classification_report
+import time
 
 from models.softmax_ner import BertSoftmax
 from utils.all_loss import get_loss_function
@@ -96,7 +97,10 @@ def main():
     os.environ["TOKENIZERS_PARALLELISM"] = 'true'
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    output_writer = SummaryWriter("train_logs/softmax/")
+    local_time = time.localtime(time.time())
+    time_str = time.strftime("%H-%M-%S", local_time)
+    output_writer = SummaryWriter(f"train_logs/softmax/{time_str}")
+    
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
     train_dataloader, valid_dataloader = data_generator(tokenizer)
@@ -255,7 +259,9 @@ def main_ddp():
     device = torch.device("cuda", local_rank)
 
     if local_rank == 0:
-        output_writer = SummaryWriter("train_logs/softmax")
+        local_time = time.localtime(time.time())
+        time_str = time.strftime("%H-%M-%S", local_time)
+        output_writer = SummaryWriter(f"train_logs/softmax/{time_str}")
 
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
