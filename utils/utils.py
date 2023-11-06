@@ -4,9 +4,9 @@ import numpy as np
 import random
 import json
 import argparse
-from train_config import global_point_config as g_configs
-from train_config import seq_config as s_configs
-from train_config import span_config as p_configs
+from configs import global_point_config as g_configs
+from configs import seq_config as s_configs
+from configs import span_config as p_configs
 
 
 def set_random_seed(seed_value=0):

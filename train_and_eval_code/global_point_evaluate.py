@@ -1,10 +1,10 @@
 import os
-from train_config import global_point_config as configs
+from configs import global_point_config as configs
 import torch
 import json
 from transformers import BertTokenizerFast
 from models.global_point import GlobalPoint
-from data_process.global_point_dataloader import GlobalPointDataset
+from data.global_point_dataloader import GlobalPointDataset
 from torch.utils.data import DataLoader
 from utils.utils import global_decode_ent, load_data
 

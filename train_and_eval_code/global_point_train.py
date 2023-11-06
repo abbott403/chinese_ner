@@ -8,15 +8,14 @@ from torch.cuda.amp import GradScaler
 from transformers import BertTokenizerFast
 import os
 from tqdm import tqdm
-import time
 
 from models.global_point import GlobalPoint
 from utils.all_loss import multilabel_categorical_crossentropy
 from utils.all_metrics import GlobalPointerScore
-from train_config import global_point_config as configs
+from configs import global_point_config as configs
 from utils.utils import set_random_seed, ddp_reduce_mean
-from data_process.global_point_dataloader import data_generator, data_generator_ddp
-from callback.adversarial import FGM
+from data.global_point_dataloader import data_generator, data_generator_ddp
+from utils.adversarial import FGM
 
 
 def train(model, dataloader, epoch, optimizer, scheduler, device):
@@ -86,10 +85,7 @@ def main():
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    local_time = time.localtime(time.time())
-    time_str = time.strftime("%H-%M-%S", local_time)
-    output_writer = SummaryWriter(f"train_logs/global/{time_str}")
-    
+    output_writer = SummaryWriter("train_logs/global/")
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
     train_dataloader, valid_dataloader, train_sampler = data_generator(tokenizer)
@@ -226,9 +222,7 @@ def main_ddp():
     device = torch.device("cuda", local_rank)
 
     if local_rank == 0:
-        local_time = time.localtime(time.time())
-        time_str = time.strftime("%H-%M-%S", local_time)
-        output_writer = SummaryWriter(f"train_logs/global/{time_str}")
+        output_writer = SummaryWriter("train_logs/")
 
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)

@@ -14,23 +14,19 @@ class BertSpan(BertPreTrainedModel):
         self.dropout = nn.Dropout(hidden_dropout_prob)
         self.start_fc = nn.Linear(model_config.hidden_size, self.num_labels)
         if self.soft_label:
-            self.end_fc = nn.Linear(model_config.hidden_size + self.num_labels, self.num_labels)
+            self.end_fc = nn.Sequential(
+                nn.Linear(model_config.hidden_size + self.num_labels, model_config.hidden_size + self.num_labels),
+                nn.Tanh(),
+                nn.LayerNorm(model_config.hidden_size + self.num_labels),
+                nn.Linear(model_config.hidden_size + self.num_labels, self.num_labels)
+            )
         else:
-            self.end_fc = nn.Linear(model_config.hidden_size + 1, self.num_labels)
-        # if self.soft_label:
-        #     self.end_fc = nn.Sequential(
-        #         nn.Linear(model_config.hidden_size + self.num_labels, model_config.hidden_size + self.num_labels),
-        #         nn.Tanh(),
-        #         nn.LayerNorm(model_config.hidden_size + self.num_labels),
-        #         nn.Linear(model_config.hidden_size + self.num_labels, self.num_labels)
-        #     )
-        # else:
-        #     self.end_fc = nn.Sequential(
-        #         nn.Linear(model_config.hidden_size + 1, model_config.hidden_size + 1),
-        #         nn.Tanh(),
-        #         nn.LayerNorm(model_config.hidden_size + 1),
-        #         nn.Linear(model_config.hidden_size + 1, self.num_labels)
-        #     )
+            self.end_fc = nn.Sequential(
+                nn.Linear(model_config.hidden_size + 1, model_config.hidden_size + 1),
+                nn.Tanh(),
+                nn.LayerNorm(model_config.hidden_size + 1),
+                nn.Linear(model_config.hidden_size + 1, self.num_labels)
+            )
 
         self.init_weights()
 

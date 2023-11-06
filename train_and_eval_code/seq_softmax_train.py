@@ -9,15 +9,14 @@ from transformers import BertTokenizerFast, BertConfig
 import os
 from tqdm import tqdm
 from sklearn.metrics import classification_report
-import time
 
 from models.softmax_ner import BertSoftmax
 from utils.all_loss import get_loss_function
 from utils.all_metrics import SeqEntityScore
-from train_config import seq_config as configs
+from configs import seq_config as configs
 from utils.utils import set_random_seed, ddp_reduce_mean, freeze_weight
-from data_process.seq_dataloader import data_generator, data_generator_ddp
-from callback.adversarial import FGM
+from data.seq_dataloader import data_generator, data_generator_ddp
+from utils.adversarial import FGM
 
 
 def train(model, dataloader, epoch, optimizer, scheduler, device, loss_fn):
@@ -97,10 +96,7 @@ def main():
     os.environ["TOKENIZERS_PARALLELISM"] = 'true'
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    local_time = time.localtime(time.time())
-    time_str = time.strftime("%H-%M-%S", local_time)
-    output_writer = SummaryWriter(f"train_logs/softmax/{time_str}")
-    
+    output_writer = SummaryWriter("train_logs/softmax/")
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
     train_dataloader, valid_dataloader = data_generator(tokenizer)
@@ -259,9 +255,7 @@ def main_ddp():
     device = torch.device("cuda", local_rank)
 
     if local_rank == 0:
-        local_time = time.localtime(time.time())
-        time_str = time.strftime("%H-%M-%S", local_time)
-        output_writer = SummaryWriter(f"train_logs/softmax/{time_str}")
+        output_writer = SummaryWriter("train_logs/softmax")
 
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)

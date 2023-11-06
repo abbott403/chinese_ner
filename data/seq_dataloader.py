@@ -3,11 +3,12 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import os
-from train_config import global_point_config as configs
-from data_process.load_ner_data import load_data_span_format
+from configs import seq_config as configs
+from data.load_ner_data import load_data
+from utils.utils import filter_data
 
 
-class GlobalPointDataset(Dataset):
+class SeqDataset(Dataset):
     def __init__(self, data):
         self.data = data
         self.length = len(data)
@@ -35,9 +36,6 @@ class DataCollate:
         Returns:
             list: [(input_ids, attention_mask, token_type_ids, labels),(),()...]
         """
-        ent_type_size = len(ent2id)
-        batch_size = len(datas)
-
         batch_sentence = []
         for sample in datas:
             batch_sentence.append(sample['text'])
@@ -45,19 +43,22 @@ class DataCollate:
             batch_sentence,
             padding=True,
             return_tensors="pt")
-        max_seq_len = batch_inputs['input_ids'].shape[1]
-        batch_label = np.zeros((batch_size, ent_type_size, max_seq_len, max_seq_len), dtype=int)
+        batch_label = np.zeros(batch_inputs['input_ids'].shape, dtype=int)
 
         for batch_idx, sample in enumerate(datas):
             input_data = self.tokenizer(sample["text"])
+            batch_label[batch_idx][0] = -100
+            batch_label[batch_idx][len(input_data.tokens()) - 1:] = -100
 
-            for start, end, tag in sample["entity_list"]:
+            for start, end, tag, _ in sample["entity_list"]:
                 token_start = input_data.char_to_token(start)
                 token_end = input_data.char_to_token(end)
                 # print(input_data.tokens())
                 # print(input_data.tokens()[token_start: token_end+1])
 
-                batch_label[batch_idx, ent2id[tag], token_start, token_end] = 1
+                batch_label[batch_idx][token_start] = ent2id[tag]
+                batch_label[batch_idx][token_start + 1: token_end + 1] = ent2id[tag] + 1
+            # print(batch_label)
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
                torch.tensor(batch_label)
@@ -71,8 +72,8 @@ class DataCollate:
 
         for sample in zip(input_ids, token_type_ids, attention_mask, batch_label):
             input_ids_list.append(sample[0])
-            attention_mask_list.append(sample[1])
-            token_type_ids_list.append(sample[2])
+            token_type_ids_list.append(sample[1])
+            attention_mask_list.append(sample[2])
             labels_list.append(sample[3])
 
         batch_input_ids = torch.stack(input_ids_list, dim=0)
@@ -84,59 +85,43 @@ class DataCollate:
 
 
 def data_generator(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "train.json")
-    dev_data_path = os.path.join(configs.train_data_path, "dev.json")
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
-    train_data = load_data_span_format(train_data_path)
-    dev_data = load_data_span_format(dev_data_path)
-    all_data = train_data + dev_data
-
-    max_token_num = 0
-    for sample in all_data:
-        tokens = tokenizer(sample["text"])["input_ids"]
-        max_token_num = max(max_token_num, len(tokens))
-
-    assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
+    train_data = load_data(train_data_path)
+    train_data = filter_data(train_data)
+    dev_data = load_data(dev_data_path)
 
     data_collate = DataCollate(tokenizer)
+    train_dataloader = DataLoader(SeqDataset(train_data), batch_size=configs.batch_size, shuffle=True,
+                                  num_workers=configs.num_work_load, drop_last=False,
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                  persistent_workers=True)
+    valid_dataloader = DataLoader(SeqDataset(dev_data), batch_size=configs.batch_size,
+                                  num_workers=configs.num_work_load, drop_last=False,
+                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                  persistent_workers=True)
 
-    train_dataset = GlobalPointDataset(train_data)
-    train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, shuffle=True,
-                                  num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
-
-    dev_dataset = GlobalPointDataset(dev_data)
-    dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
-                                num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
-
-    return train_dataloader, dev_dataloader
+    return train_dataloader, valid_dataloader
 
 
 def data_generator_ddp(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "train.json")
-    dev_data_path = os.path.join(configs.train_data_path, "dev.json")
+    train_data_path = os.path.join(configs.train_data_path, "train.txt")
+    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
 
-    train_data = load_data_span_format(train_data_path)
-    dev_data = load_data_span_format(dev_data_path)
-    all_data = train_data + dev_data
-
-    max_token_num = 0
-    for sample in all_data:
-        tokens = tokenizer(sample["text"])["input_ids"]
-        max_token_num = max(max_token_num, len(tokens))
-
-    assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
+    train_data = load_data(train_data_path)
+    train_data = filter_data(train_data)
+    dev_data = load_data(dev_data_path)
 
     data_collate = DataCollate(tokenizer)
 
-    train_dataset = GlobalPointDataset(train_data)
+    train_dataset = SeqDataset(train_data)
     train_sampler = DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
                                   num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
                                   collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
 
-    dev_dataset = GlobalPointDataset(dev_data)
+    dev_dataset = SeqDataset(dev_data)
     dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
                                 num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
                                 collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
@@ -147,9 +132,26 @@ def data_generator_ddp(tokenizer):
 if __name__ == "__main__":
     from transformers import BertTokenizerFast
 
-    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/", add_special_tokens=True,
-                                                  do_lower_case=True)
+    train_path = os.path.join("../", configs.train_data_path, "test.txt")
+    train_datas = load_data(train_path)
 
-    t_data, v_data = data_generator(tokenizer)
-    batch_X = next(iter(t_data))
+    test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
+                                                       add_special_tokens=True,
+                                                       do_lower_case=False)
+    data_coll = DataCollate(test_tokenizer)
+    train_loader = DataLoader(SeqDataset(train_datas), batch_size=4, shuffle=False,
+                              num_workers=1, drop_last=False,
+                              collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
 
+    batch_X = next(iter(train_loader))
+    print(batch_X)
+    zeros = torch.zeros_like(batch_X[3])
+    tags = torch.where(batch_X[3] < 0, zeros, batch_X[3])
+    print(tags)
+    # for k in range(5):
+    #     encoded_sequence = batch_X[0][k]
+    #     print(test_tokenizer.decode(encoded_sequence))
+    #
+    #     encoded_label = batch_X[3][k].numpy().tolist()
+    #     print(encoded_label)
+    #     print([configs.id2ent[i] for i in encoded_label if i != -100])

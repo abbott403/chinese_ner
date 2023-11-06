@@ -1,10 +1,10 @@
 import os
-from train_config import seq_config as configs
+from configs import seq_config as configs
 import torch
 import json
 from transformers import BertTokenizerFast, BertConfig
 from models.crf_ner import BertCrf
-from data_process.seq_dataloader import SeqDataset
+from data.seq_dataloader import SeqDataset
 from torch.utils.data import DataLoader
 from utils.utils import crf_decode_ent, load_data
 
