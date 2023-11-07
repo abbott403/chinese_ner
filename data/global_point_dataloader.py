@@ -60,7 +60,7 @@ class DataCollate:
                 batch_label[batch_idx, ent2id[tag], token_start, token_end] = 1
 
         return batch_inputs["input_ids"], batch_inputs["token_type_ids"], batch_inputs["attention_mask"], \
-               torch.tensor(batch_label)
+            torch.tensor(batch_label)
 
     def generate_batch(self, batch_data, ent2id):
         input_ids, token_type_ids, attention_mask, batch_label = self.generate_inputs(batch_data, ent2id)
@@ -101,57 +101,34 @@ def data_generator(tokenizer):
     data_collate = DataCollate(tokenizer)
 
     train_dataset = GlobalPointDataset(train_data)
-    train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, shuffle=True,
-                                  num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
-
-    dev_dataset = GlobalPointDataset(dev_data)
-    dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
-                                num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
-
-    return train_dataloader, dev_dataloader
-
-
-def data_generator_ddp(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "train.json")
-    dev_data_path = os.path.join(configs.train_data_path, "dev.json")
-
-    train_data = load_data_span_format(train_data_path)
-    dev_data = load_data_span_format(dev_data_path)
-    all_data = train_data + dev_data
-
-    max_token_num = 0
-    for sample in all_data:
-        tokens = tokenizer(sample["text"])["input_ids"]
-        max_token_num = max(max_token_num, len(tokens))
-
-    assert max_token_num <= configs.max_len, f'数据文本最大token数量{max_token_num}超过预设{configs.max_len}'
-
-    data_collate = DataCollate(tokenizer)
-
-    train_dataset = GlobalPointDataset(train_data)
-    train_sampler = DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
-                                  num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
-                                  persistent_workers=True)
-
     dev_dataset = GlobalPointDataset(dev_data)
     dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
                                 num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
                                 collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
-                                persistent_workers=True)
+                                persistent_workers=True, prefetch_factor=configs.batch_size // configs.num_work_load)
 
-    return train_dataloader, dev_dataloader, train_sampler
+    if configs.is_ddp:
+        train_sampler = DistributedSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
+                                      num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                      collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                      persistent_workers=True,
+                                      prefetch_factor=configs.batch_size // configs.num_work_load)
+        return train_dataloader, dev_dataloader, train_sampler
+    else:
+        train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, shuffle=True,
+                                      num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                      collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                      persistent_workers=True,
+                                      prefetch_factor=configs.batch_size // configs.num_work_load)
+        return train_dataloader, dev_dataloader
 
 
 if __name__ == "__main__":
     from transformers import BertTokenizerFast
 
-    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/", add_special_tokens=True,
+    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",add_special_tokens=True,
                                                   do_lower_case=True)
 
     t_data, v_data = data_generator(tokenizer)
     batch_X = next(iter(t_data))
-

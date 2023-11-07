@@ -93,65 +93,54 @@ def data_generator(tokenizer):
     dev_data = load_data(dev_data_path)
 
     data_collate = DataCollate(tokenizer)
-    train_dataloader = DataLoader(SeqDataset(train_data), batch_size=configs.batch_size, shuffle=True,
-                                  num_workers=configs.num_work_load, drop_last=False,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
-                                  persistent_workers=True)
-    valid_dataloader = DataLoader(SeqDataset(dev_data), batch_size=configs.batch_size,
-                                  num_workers=configs.num_work_load, drop_last=False,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
-                                  persistent_workers=True)
-
-    return train_dataloader, valid_dataloader
-
-
-def data_generator_ddp(tokenizer):
-    train_data_path = os.path.join(configs.train_data_path, "train.txt")
-    dev_data_path = os.path.join(configs.train_data_path, "test.txt")
-
-    train_data = load_data(train_data_path)
-    train_data = filter_data(train_data)
-    dev_data = load_data(dev_data_path)
-
-    data_collate = DataCollate(tokenizer)
 
     train_dataset = SeqDataset(train_data)
-    train_sampler = DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
-                                  num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                  collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
-
     dev_dataset = SeqDataset(dev_data)
     dev_dataloader = DataLoader(dev_dataset, batch_size=configs.batch_size,
                                 num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
-                                collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id))
+                                collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                persistent_workers=True, prefetch_factor=configs.batch_size // configs.num_work_load)
 
-    return train_dataloader, dev_dataloader, train_sampler
+    if configs.is_ddp:
+        train_sampler = DistributedSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, sampler=train_sampler,
+                                      num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                      collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                      persistent_workers=True,
+                                      prefetch_factor=configs.batch_size // configs.num_work_load)
+        return train_dataloader, dev_dataloader, train_sampler
+    else:
+        train_dataloader = DataLoader(train_dataset, batch_size=configs.batch_size, shuffle=True,
+                                      num_workers=configs.num_work_load, drop_last=False, pin_memory=True,
+                                      collate_fn=lambda x: data_collate.generate_batch(x, configs.ent2id),
+                                      persistent_workers=True,
+                                      prefetch_factor=configs.batch_size // configs.num_work_load)
+        return train_dataloader, dev_dataloader
 
-
-if __name__ == "__main__":
-    from transformers import BertTokenizerFast
-
-    train_path = os.path.join("../", configs.train_data_path, "test.txt")
-    train_datas = load_data(train_path)
-
-    test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
-                                                       add_special_tokens=True,
-                                                       do_lower_case=False)
-    data_coll = DataCollate(test_tokenizer)
-    train_loader = DataLoader(SeqDataset(train_datas), batch_size=4, shuffle=False,
-                              num_workers=1, drop_last=False,
-                              collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
-
-    batch_X = next(iter(train_loader))
-    print(batch_X)
-    zeros = torch.zeros_like(batch_X[3])
-    tags = torch.where(batch_X[3] < 0, zeros, batch_X[3])
-    print(tags)
-    # for k in range(5):
-    #     encoded_sequence = batch_X[0][k]
-    #     print(test_tokenizer.decode(encoded_sequence))
-    #
-    #     encoded_label = batch_X[3][k].numpy().tolist()
-    #     print(encoded_label)
-    #     print([configs.id2ent[i] for i in encoded_label if i != -100])
+# if __name__ == "__main__":
+#     from transformers import BertTokenizerFast
+#
+#     train_path = os.path.join("../", configs.train_data_path, "test.txt")
+#     train_datas = load_data(train_path)
+#
+#     test_tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",
+#                                                        add_special_tokens=True,
+#                                                        do_lower_case=False)
+#     data_coll = DataCollate(test_tokenizer)
+#     train_loader = DataLoader(SeqDataset(train_datas), batch_size=4, shuffle=False,
+#                               num_workers=1, drop_last=False,
+#                               collate_fn=lambda x: data_coll.generate_batch(x, configs.ent2id))
+#
+#     batch_X = next(iter(train_loader))
+#     print(batch_X)
+#     zeros = torch.zeros_like(batch_X[3])
+#     tags = torch.where(batch_X[3] < 0, zeros, batch_X[3])
+#     print(tags)
+#
+#     for k in range(5):
+#         encoded_sequence = batch_X[0][k]
+#         print(test_tokenizer.decode(encoded_sequence))
+#
+#         encoded_label = batch_X[3][k].numpy().tolist()
+#         print(encoded_label)
+#         print([configs.id2ent[i] for i in encoded_label if i != -100])
