@@ -1,8 +1,52 @@
-import torch
 from torch import nn
-from transformers import BertModel
+from transformers import BertModel, BertPreTrainedModel
+import torch
+from torch.nn import functional as F
+from models.layers.crf import CRF
 
 
+class BertCrf(BertPreTrainedModel):
+    def __init__(self, model_config, num_tags, dropout_rate):
+        super(BertCrf, self).__init__(model_config)
+        self.bert = BertModel(model_config, add_pooling_layer=False).from_pretrained("")
+        self.dropout = nn.Dropout(dropout_rate)
+        self.classifier = nn.Linear(model_config.hidden_size, num_tags)
+        self.crf = CRF(num_tags, True)
+        # self.init_weights()
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
+        outputs = self.bert(input_ids, attention_mask, token_type_ids)
+        sequence_output = self.dropout(outputs[0])
+        logits = self.classifier(sequence_output)
+        outputs = (logits,)
+        if labels is not None:
+            loss = self.crf(emissions=logits, tags=labels, mask=attention_mask)
+            outputs = (-1 * loss,) + outputs
+        else:
+            outputs = self.crf.decode(outputs[0], attention_mask)
+        return outputs  # (loss), scores
+
+
+# -------------------Softmax-----------------------------
+class BertSoftmax(BertPreTrainedModel):
+    def __init__(self, bert_config, num_labels, hidden_dropout_prob):
+        super(BertSoftmax, self).__init__(bert_config)
+
+        self.bert = BertModel(bert_config, add_pooling_layer=False).from_pretrained("")
+        self.dropout = nn.Dropout(hidden_dropout_prob)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_labels)
+
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        outputs = self.bert(input_ids, attention_mask, token_type_ids)
+        sequence_output = self.dropout(outputs.last_hidden_state)
+        # sequence_output = outputs.last_hidden_state
+        logits = self.classifier(sequence_output)
+        # outputs = (logits,) + outputs[2:]
+
+        return logits
+
+
+# -------------------Global Point-----------------------------
 class GlobalPoint(nn.Module):
     def __init__(self, ent_type_size, inner_dim, device="cuda", rope=True):
         super(GlobalPoint, self).__init__()
@@ -171,3 +215,54 @@ class EffiGlobalPointer(nn.Module):
         logits = logits[:, None] + bias[:, ::2, None] + bias[:, 1::2, :, None]  # logits[:, None] 增加一个维度
         logits = self.add_mask_tril(logits, mask=attention_mask)
         return logits
+
+
+# --------------------Span-------------------------------
+class BertSpan(BertPreTrainedModel):
+    def __init__(self, model_config, num_labels, hidden_dropout_prob, soft_label):
+        super(BertSpan, self).__init__(model_config)
+        self.soft_label = soft_label
+        self.num_labels = num_labels
+
+        self.bert = BertModel(model_config, add_pooling_layer=False).from_pretrained("")
+        self.dropout = nn.Dropout(hidden_dropout_prob)
+        self.start_fc = nn.Linear(model_config.hidden_size, self.num_labels)
+        if self.soft_label:
+            self.end_fc = nn.Sequential(
+                nn.Linear(model_config.hidden_size + self.num_labels, model_config.hidden_size + self.num_labels),
+                nn.Tanh(),
+                nn.LayerNorm(model_config.hidden_size + self.num_labels),
+                nn.Linear(model_config.hidden_size + self.num_labels, self.num_labels)
+            )
+        else:
+            self.end_fc = nn.Sequential(
+                nn.Linear(model_config.hidden_size + 1, model_config.hidden_size + 1),
+                nn.Tanh(),
+                nn.LayerNorm(model_config.hidden_size + 1),
+                nn.Linear(model_config.hidden_size + 1, self.num_labels)
+            )
+
+        # self.init_weights()
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+        sequence_output = self.dropout(outputs[0])
+        start_logits = self.start_fc(sequence_output)
+        if start_positions is not None:
+            if self.soft_label:
+                batch_size, seq_len = input_ids.size()
+                label_logits = torch.zeros((batch_size, seq_len, self.num_labels))
+                label_logits = label_logits.to(input_ids.device)
+                label_logits.scatter_(2, start_positions.unsqueeze(2), 1)   # batch_size, max_len, 1
+            else:
+                label_logits = start_positions.unsqueeze(2).float()
+        else:
+            label_logits = F.softmax(start_logits, -1)
+            if not self.soft_label:
+                label_logits = torch.argmax(label_logits, -1).unsqueeze(2).float()
+
+        end_input = torch.cat([sequence_output, label_logits], dim=-1)
+        end_logits = self.end_fc(end_input)
+        outputs = (start_logits, end_logits,)
+
+        return outputs

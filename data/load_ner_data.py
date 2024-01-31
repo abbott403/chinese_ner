@@ -39,6 +39,3 @@ def load_data_span_format(data_path):
             datas.append(item)
 
     return datas
-
-
-# if __name__ == "__main__":

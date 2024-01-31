@@ -9,12 +9,12 @@ from transformers import BertTokenizerFast
 import os
 from tqdm import tqdm
 
-from models.global_point import GlobalPoint
+from models.bert_ner import GlobalPoint
 from utils.all_loss import multilabel_categorical_crossentropy
 from utils.all_metrics import GlobalPointerScore
 from configs import global_point_config as configs
 from utils.utils import set_random_seed, ddp_reduce_mean
-from data.global_point_dataloader import data_generator, data_generator_ddp
+from data.global_point_dataloader import data_generator
 from utils.adversarial import FGM
 
 
@@ -222,11 +222,11 @@ def main_ddp():
     device = torch.device("cuda", local_rank)
 
     if local_rank == 0:
-        output_writer = SummaryWriter("train_logs/")
+        output_writer = SummaryWriter("train_logs/global_point/")
 
     tokenizer = BertTokenizerFast.from_pretrained(configs.pretrained_model_path, add_special_tokens=True,
                                                   do_lower_case=False)
-    train_dataloader, valid_dataloader, train_sampler = data_generator_ddp(tokenizer)
+    train_dataloader, valid_dataloader, train_sampler = data_generator(tokenizer)
 
     model = GlobalPoint(ent_type_size, 64)
     model = model.to(device)

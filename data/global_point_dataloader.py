@@ -124,11 +124,11 @@ def data_generator(tokenizer):
         return train_dataloader, dev_dataloader
 
 
-if __name__ == "__main__":
-    from transformers import BertTokenizerFast
-
-    tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",add_special_tokens=True,
-                                                  do_lower_case=True)
-
-    t_data, v_data = data_generator(tokenizer)
-    batch_X = next(iter(t_data))
+# if __name__ == "__main__":
+#     from transformers import BertTokenizerFast
+#
+#     tokenizer = BertTokenizerFast.from_pretrained("../third_party_weights/bert_base_chinese/",add_special_tokens=True,
+#                                                   do_lower_case=True)
+#
+#     t_data, v_data = data_generator(tokenizer)
+#     batch_X = next(iter(t_data))
